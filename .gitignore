@@ -21,3 +21,6 @@ desktop.ini
 # Runtime
 pids/
 *.pid
+
+# User saved solutions (personal runtime data — not committed)
+solutions/*.js

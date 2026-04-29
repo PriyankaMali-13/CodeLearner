@@ -18,6 +18,11 @@ const modelSelect     = document.getElementById('modelSelect');
 const ollamaStatus    = document.getElementById('ollamaStatus');
 const stopBtn         = document.getElementById('stopBtn');
 const clearInputBtn   = document.getElementById('clearInputBtn');
+const saveSolutionBtn = document.getElementById('saveSolutionBtn');
+const mySolutionsBtn  = document.getElementById('mySolutionsBtn');
+
+const saveSolutionModal  = new bootstrap.Modal(document.getElementById('saveSolutionModal'));
+const solutionsModal     = new bootstrap.Modal(document.getElementById('solutionsModal'));
 
 // Abort controller — lets us cancel in-flight fetch requests
 let currentAbort = null;
@@ -418,6 +423,132 @@ resetBtn.addEventListener('click', resetSession);
 document.querySelectorAll('.quick-btn').forEach(btn => {
   btn.addEventListener('click', () => doAction(btn.dataset.action));
 });
+
+// ── Save & Browse Solutions ───────────────────────────────────────────────────
+
+function openSaveModal() {
+  const code = codeEditor.value.trim();
+  if (!code) { showToast('Write some code in the editor first!', 'warning'); return; }
+
+  const lang = languageSelect.value;
+  const ts   = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  document.getElementById('solutionFilename').value  = `solution_${ts}`;
+  document.getElementById('solutionLangDisplay').value = lang;
+  updateFilenamePreview();
+  saveSolutionModal.show();
+}
+
+function updateFilenamePreview() {
+  const raw     = document.getElementById('solutionFilename').value.trim();
+  const safe    = raw.replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_{2,}/g, '_').replace(/^_|_$/g, '') || 'solution';
+  document.getElementById('solutionFilenamePreview').textContent = `${safe}.js`;
+}
+
+async function confirmSaveSolution() {
+  const raw      = document.getElementById('solutionFilename').value.trim();
+  const language = languageSelect.value;
+  const code     = codeEditor.value.trim();
+
+  try {
+    const res  = await fetch('/api/save-solution', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ filename: raw, code, language }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Save failed');
+    saveSolutionModal.hide();
+    showToast(`Saved as ${data.filename}`, 'success');
+  } catch (e) {
+    showToast(`Save failed: ${e.message}`, 'danger');
+  }
+}
+
+async function openSolutionsModal() {
+  solutionsModal.show();
+  const body = document.getElementById('solutionsListBody');
+  body.innerHTML = '<p class="text-secondary text-center py-3">Loading...</p>';
+
+  try {
+    const res   = await fetch('/api/solutions');
+    const data  = await res.json();
+
+    if (!data.files || data.files.length === 0) {
+      body.innerHTML = '<p class="text-secondary text-center py-4"><i class="bi bi-folder2 me-2"></i>No saved solutions yet.</p>';
+      return;
+    }
+
+    body.innerHTML = `
+      <div class="table-responsive">
+        <table class="table table-dark table-hover table-sm mb-0">
+          <thead><tr>
+            <th>Filename</th>
+            <th>Saved</th>
+            <th>Size</th>
+            <th class="text-end">Actions</th>
+          </tr></thead>
+          <tbody>
+            ${data.files.map(f => `
+              <tr>
+                <td class="text-success font-monospace">${f.name}</td>
+                <td class="text-secondary small">${new Date(f.modified).toLocaleString()}</td>
+                <td class="text-secondary small">${(f.size / 1024).toFixed(1)} KB</td>
+                <td class="text-end">
+                  <button class="btn btn-sm btn-outline-success me-1 load-sol-btn" data-name="${f.name}" title="Load into editor">
+                    <i class="bi bi-upload"></i> Load
+                  </button>
+                  <button class="btn btn-sm btn-outline-danger del-sol-btn" data-name="${f.name}" title="Delete">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    body.querySelectorAll('.load-sol-btn').forEach(btn => {
+      btn.addEventListener('click', () => loadSolutionIntoEditor(btn.dataset.name));
+    });
+    body.querySelectorAll('.del-sol-btn').forEach(btn => {
+      btn.addEventListener('click', () => deleteSolution(btn.dataset.name));
+    });
+  } catch (e) {
+    body.innerHTML = `<p class="text-danger text-center py-3">Failed to load: ${e.message}</p>`;
+  }
+}
+
+async function loadSolutionIntoEditor(filename) {
+  try {
+    const res  = await fetch(`/api/solutions/${encodeURIComponent(filename)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    codeEditor.value = data.content;
+    solutionsModal.hide();
+    document.getElementById('codePanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    codeEditor.focus();
+    showToast(`Loaded: ${filename}`, 'success');
+  } catch (e) {
+    showToast(`Load failed: ${e.message}`, 'danger');
+  }
+}
+
+async function deleteSolution(filename) {
+  if (!confirm(`Delete ${filename}? This cannot be undone.`)) return;
+  try {
+    const res = await fetch(`/api/solutions/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    showToast(`Deleted ${filename}`, 'success');
+    openSolutionsModal(); // refresh list
+  } catch (e) {
+    showToast(`Delete failed: ${e.message}`, 'danger');
+  }
+}
+
+saveSolutionBtn.addEventListener('click', openSaveModal);
+mySolutionsBtn.addEventListener('click', openSolutionsModal);
+document.getElementById('confirmSaveBtn').addEventListener('click', confirmSaveSolution);
+document.getElementById('solutionFilename').addEventListener('input', updateFilenamePreview);
 
 // ── Init: check Ollama on page load ───────────────────────────────────────────
 (async () => {

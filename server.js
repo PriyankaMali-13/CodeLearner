@@ -4,6 +4,7 @@ require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
 const path    = require('path');
+const fs      = require('fs');
 const { Ollama } = require('ollama');
 
 const app    = express();
@@ -12,6 +13,9 @@ const MODEL  = process.env.OLLAMA_MODEL || 'llama3.2';
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
 
 const ollama = new Ollama({ host: OLLAMA_HOST });
+
+const SOLUTIONS_DIR = path.join(__dirname, 'solutions');
+if (!fs.existsSync(SOLUTIONS_DIR)) fs.mkdirSync(SOLUTIONS_DIR);
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -270,6 +274,73 @@ app.post('/api/reset', (req, res) => {
 app.get('/api/stats', (req, res) => {
   initSession(req);
   res.json(getStats(req));
+});
+
+// Save solution to file
+app.post('/api/save-solution', (req, res) => {
+  const { filename, code, problemTitle, difficulty, language } = req.body;
+  if (!filename || !code) return res.status(400).json({ error: 'filename and code are required.' });
+
+  const safe = filename.replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_{2,}/g, '_').replace(/^_|_$/g, '') || 'solution';
+  const filepath = path.join(SOLUTIONS_DIR, `${safe}.js`);
+
+  const header = [
+    `// Problem: ${problemTitle || safe}`,
+    `// Difficulty: ${difficulty || 'unknown'}`,
+    `// Language: ${language || 'javascript'}`,
+    `// Saved: ${new Date().toLocaleString()}`,
+    '',
+    '',
+  ].join('\n');
+
+  try {
+    fs.writeFileSync(filepath, header + code, 'utf8');
+    res.json({ ok: true, filename: `${safe}.js` });
+  } catch (err) {
+    res.status(500).json({ error: `Failed to save: ${err.message}` });
+  }
+});
+
+// List saved solutions
+app.get('/api/solutions', (req, res) => {
+  try {
+    const files = fs.readdirSync(SOLUTIONS_DIR)
+      .filter(f => f.endsWith('.js'))
+      .map(f => {
+        const stat = fs.statSync(path.join(SOLUTIONS_DIR, f));
+        return { name: f, size: stat.size, modified: stat.mtime };
+      })
+      .sort((a, b) => new Date(b.modified) - new Date(a.modified));
+    res.json({ files });
+  } catch {
+    res.json({ files: [] });
+  }
+});
+
+// Get a solution's content
+app.get('/api/solutions/:filename', (req, res) => {
+  const safe = path.basename(req.params.filename);
+  if (!safe.endsWith('.js')) return res.status(400).json({ error: 'Invalid filename.' });
+  const filepath = path.join(SOLUTIONS_DIR, safe);
+  try {
+    const content = fs.readFileSync(filepath, 'utf8');
+    res.json({ content });
+  } catch {
+    res.status(404).json({ error: 'Solution not found.' });
+  }
+});
+
+// Delete a saved solution
+app.delete('/api/solutions/:filename', (req, res) => {
+  const safe = path.basename(req.params.filename);
+  if (!safe.endsWith('.js')) return res.status(400).json({ error: 'Invalid filename.' });
+  const filepath = path.join(SOLUTIONS_DIR, safe);
+  try {
+    fs.unlinkSync(filepath);
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: 'Solution not found.' });
+  }
 });
 
 // ── Error helper ───────────────────────────────────────────────────────────────

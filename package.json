@@ -8,12 +8,14 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
+    "dotenv": "^16.6.1",
     "express": "^4.19.2",
     "express-session": "^1.18.0",
     "ollama": "^0.5.9"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"
-  }
+  },
+  "author": "",
+  "license": "ISC"
 }

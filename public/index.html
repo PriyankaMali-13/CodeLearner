@@ -77,6 +77,9 @@
       <button class="btn btn-outline-danger btn-sm mb-2 text-start" id="solutionBtn">
         <i class="bi bi-eye me-2"></i>Show Solution
       </button>
+      <button class="btn btn-outline-info btn-sm mb-2 text-start" id="mySolutionsBtn">
+        <i class="bi bi-folder2-open me-2"></i>My Solutions
+      </button>
 
       <hr class="border-secondary" />
 
@@ -187,6 +190,9 @@
         <button class="btn btn-sm btn-success flex-grow-1" id="reviewCodeBtn">
           <i class="bi bi-check2-circle me-1"></i>Review My Code
         </button>
+        <button class="btn btn-sm btn-outline-info" id="saveSolutionBtn" title="Save solution to folder">
+          <i class="bi bi-floppy"></i>
+        </button>
         <button class="btn btn-sm btn-outline-secondary" id="clearCodeBtn" title="Clear editor">
           <i class="bi bi-trash"></i>
         </button>
@@ -222,6 +228,50 @@
     <div class="d-flex">
       <div class="toast-body" id="toastMessage">Done!</div>
       <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>
+  </div>
+</div>
+
+<!-- Save Solution Modal -->
+<div class="modal fade" id="saveSolutionModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content bg-dark border-success">
+      <div class="modal-header border-success">
+        <h6 class="modal-title text-success"><i class="bi bi-floppy me-2"></i>Save Solution</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label text-secondary small">Problem Name / Filename</label>
+          <input type="text" id="solutionFilename" class="form-control bg-dark text-white border-secondary" placeholder="e.g. two_sum_solution" />
+          <div class="form-text text-secondary">Will be saved as <code id="solutionFilenamePreview">solution.js</code></div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label text-secondary small">Language</label>
+          <input type="text" id="solutionLangDisplay" class="form-control bg-dark text-secondary border-secondary" readonly />
+        </div>
+      </div>
+      <div class="modal-footer border-success">
+        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">No, Cancel</button>
+        <button class="btn btn-success btn-sm" id="confirmSaveBtn">
+          <i class="bi bi-floppy me-1"></i>Yes, Save
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Browse Solutions Modal -->
+<div class="modal fade" id="solutionsModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content bg-dark border-info">
+      <div class="modal-header border-info">
+        <h6 class="modal-title text-info"><i class="bi bi-folder2-open me-2"></i>My Saved Solutions</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="solutionsListBody">
+        <p class="text-secondary text-center py-3">Loading...</p>
+      </div>
     </div>
   </div>
 </div>
