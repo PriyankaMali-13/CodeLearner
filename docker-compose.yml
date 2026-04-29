@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+
+  # ── Ollama (local LLM server) ──────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: code_learner_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama   # persists downloaded models
+    restart: unless-stopped
+    # To pull a model after first start:
+    #   docker exec code_learner_ollama ollama pull llama3.2
+
+  # ── Code Learner Node.js app ───────────────────────────────────────────────
+  app:
+    build: .
+    container_name: code_learner_app
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      OLLAMA_HOST: http://ollama:11434   # points to the ollama service above
+      OLLAMA_MODEL: llama3.2
+      SESSION_SECRET: change_this_secret
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
