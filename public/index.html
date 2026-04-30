@@ -58,6 +58,9 @@
     <select id="modelSelect" class="form-select form-select-sm" style="width:auto;font-size:0.78rem;" title="Select Ollama model">
       <option value="">Loading models...</option>
     </select>
+    <button class="btn btn-sm btn-outline-primary" id="historyBtn" title="Conversation History">
+      <i class="bi bi-clock-history me-1"></i>History
+    </button>
     <button class="btn btn-sm btn-outline-danger" id="resetBtn" title="Reset Session">
       <i class="bi bi-arrow-counterclockwise"></i> Reset
     </button>
@@ -280,6 +283,21 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body" id="solutionsListBody">
+        <p class="text-secondary text-center py-3">Loading...</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Conversation History Modal -->
+<div class="modal fade" id="historyModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content border-primary">
+      <div class="modal-header border-primary">
+        <h6 class="modal-title text-primary"><i class="bi bi-clock-history me-2"></i>Conversation History</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="historyListBody">
         <p class="text-secondary text-center py-3">Loading...</p>
       </div>
     </div>

@@ -16,8 +16,11 @@ const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
 
 const ollama = new Ollama({ host: OLLAMA_HOST });
 
-const SOLUTIONS_DIR = path.join(__dirname, 'solutions');
+const SOLUTIONS_DIR     = path.join(__dirname, 'solutions');
 if (!fs.existsSync(SOLUTIONS_DIR)) fs.mkdirSync(SOLUTIONS_DIR);
+
+const CONVERSATIONS_DIR = path.join(__dirname, 'conversations');
+if (!fs.existsSync(CONVERSATIONS_DIR)) fs.mkdirSync(CONVERSATIONS_DIR);
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -81,17 +84,74 @@ const SYSTEM_PROMPT = `You are CodeMentor, an expert coding tutor. Your job is t
 
 ## Always end your response with a natural next-step prompt to keep the student engaged.`;
 
+// ── Conversation persistence ───────────────────────────────────────────────────
+function loadConversationFile(sessionId) {
+  try {
+    const filepath = path.join(CONVERSATIONS_DIR, `${sessionId}.json`);
+    if (!fs.existsSync(filepath)) return null;
+    return JSON.parse(fs.readFileSync(filepath, 'utf8'));
+  } catch { return null; }
+}
+
+function saveConversation(req) {
+  try {
+    const sessionId = req.session.id;
+    const existing  = loadConversationFile(sessionId);
+    const startedAt = existing?.startedAt || new Date().toISOString();
+
+    let title = 'Coding Session';
+    const firstAI = req.session.messages.find(m => m.role === 'assistant');
+    if (firstAI) {
+      const m = firstAI.content.match(/###?\s*(?:🟢\s*)?Problem:\s*(.+)/);
+      if (m) title = m[1].replace(/\*+/g, '').trim();
+    }
+
+    const data = {
+      sessionId,
+      title,
+      messages:     req.session.messages,
+      difficulty:   req.session.difficulty   || 'BEGINNER',
+      solvedCount:  req.session.solvedCount  || 0,
+      problemCount: req.session.problemCount || 0,
+      hintCount:    req.session.hintCount    || 0,
+      model:        req.session.model        || MODEL,
+      startedAt,
+      lastActiveAt: new Date().toISOString(),
+    };
+
+    fs.writeFileSync(
+      path.join(CONVERSATIONS_DIR, `${sessionId}.json`),
+      JSON.stringify(data, null, 2),
+      'utf8',
+    );
+  } catch (err) {
+    console.error('Failed to save conversation:', err.message);
+  }
+}
+
 // ── Session helpers ────────────────────────────────────────────────────────────
 function initSession(req) {
   if (!req.session.initialized) {
-    req.session.initialized  = true;
-    req.session.messages     = [];
-    req.session.difficulty   = 'BEGINNER';
-    req.session.solvedCount  = 0;
-    req.session.problemCount = 0;
-    req.session.hintCount    = 0;
-    req.session.weakAreas    = {};
-    req.session.model        = MODEL;
+    const saved = loadConversationFile(req.session.id);
+    if (saved && saved.messages && saved.messages.length > 0) {
+      req.session.initialized  = true;
+      req.session.messages     = saved.messages;
+      req.session.difficulty   = saved.difficulty   || 'BEGINNER';
+      req.session.solvedCount  = saved.solvedCount  || 0;
+      req.session.problemCount = saved.problemCount || 0;
+      req.session.hintCount    = saved.hintCount    || 0;
+      req.session.weakAreas    = {};
+      req.session.model        = saved.model        || MODEL;
+    } else {
+      req.session.initialized  = true;
+      req.session.messages     = [];
+      req.session.difficulty   = 'BEGINNER';
+      req.session.solvedCount  = 0;
+      req.session.problemCount = 0;
+      req.session.hintCount    = 0;
+      req.session.weakAreas    = {};
+      req.session.model        = MODEL;
+    }
   }
 }
 
@@ -177,6 +237,7 @@ app.post('/api/start', async (req, res) => {
 
   try {
     const reply = await chat(req, prompt);
+    saveConversation(req);
     res.json({ message: reply, stats: getStats(req) });
   } catch (err) {
     console.error(err);
@@ -194,6 +255,7 @@ app.post('/api/chat', async (req, res) => {
 
   try {
     const reply = await chat(req, message);
+    saveConversation(req);
     res.json({ message: reply, stats: getStats(req) });
   } catch (err) {
     console.error(err);
@@ -223,6 +285,7 @@ app.post('/api/action', async (req, res) => {
 
   try {
     const reply = await chat(req, prompt);
+    saveConversation(req);
     res.json({ message: reply, stats: getStats(req) });
   } catch (err) {
     console.error(err);
@@ -251,6 +314,7 @@ Review this code:
 
   try {
     const reply = await chat(req, prompt);
+    saveConversation(req);
     res.json({ message: reply, stats: getStats(req) });
   } catch (err) {
     console.error(err);
@@ -276,6 +340,75 @@ app.post('/api/reset', (req, res) => {
 app.get('/api/stats', (req, res) => {
   initSession(req);
   res.json(getStats(req));
+});
+
+// Current session — used by frontend to restore chat after page refresh / server restart
+app.get('/api/session', (req, res) => {
+  initSession(req);
+  res.json({
+    hasSession: req.session.messages.length > 0,
+    messages:   req.session.messages,
+    stats:      getStats(req),
+  });
+});
+
+// List all saved conversation sessions
+app.get('/api/conversations', (req, res) => {
+  try {
+    const files = fs.readdirSync(CONVERSATIONS_DIR)
+      .filter(f => f.endsWith('.json'))
+      .map(f => {
+        try {
+          const d = JSON.parse(fs.readFileSync(path.join(CONVERSATIONS_DIR, f), 'utf8'));
+          return {
+            id:           d.sessionId,
+            title:        d.title        || 'Coding Session',
+            difficulty:   d.difficulty   || 'BEGINNER',
+            messageCount: d.messages     ? d.messages.length : 0,
+            solvedCount:  d.solvedCount  || 0,
+            model:        d.model        || '',
+            startedAt:    d.startedAt,
+            lastActiveAt: d.lastActiveAt,
+          };
+        } catch { return null; }
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.lastActiveAt) - new Date(a.lastActiveAt));
+    res.json({ conversations: files });
+  } catch {
+    res.json({ conversations: [] });
+  }
+});
+
+// Resume a saved conversation into the current session
+app.post('/api/conversations/:id/resume', (req, res) => {
+  const id    = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
+  const saved = loadConversationFile(id);
+  if (!saved) return res.status(404).json({ error: 'Conversation not found.' });
+
+  req.session.initialized  = true;
+  req.session.messages     = saved.messages;
+  req.session.difficulty   = saved.difficulty   || 'BEGINNER';
+  req.session.solvedCount  = saved.solvedCount  || 0;
+  req.session.problemCount = saved.problemCount || 0;
+  req.session.hintCount    = saved.hintCount    || 0;
+  req.session.weakAreas    = {};
+  req.session.model        = saved.model        || MODEL;
+
+  res.json({ messages: saved.messages, stats: getStats(req) });
+});
+
+// Delete a saved conversation
+app.delete('/api/conversations/:id', (req, res) => {
+  const id       = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
+  const filepath = path.join(CONVERSATIONS_DIR, `${id}.json`);
+  try {
+    if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'Not found.' });
+    fs.unlinkSync(filepath);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Save solution to file

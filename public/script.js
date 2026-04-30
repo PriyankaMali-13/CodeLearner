@@ -20,6 +20,7 @@ const stopBtn         = document.getElementById('stopBtn');
 const clearInputBtn   = document.getElementById('clearInputBtn');
 const saveSolutionBtn = document.getElementById('saveSolutionBtn');
 const mySolutionsBtn  = document.getElementById('mySolutionsBtn');
+const historyBtn      = document.getElementById('historyBtn');
 const runBtn          = document.getElementById('runBtn');
 const outputPanel     = document.getElementById('outputPanel');
 const outputContent   = document.getElementById('outputContent');
@@ -28,6 +29,7 @@ const clearOutputBtn  = document.getElementById('clearOutputBtn');
 
 const saveSolutionModal  = new bootstrap.Modal(document.getElementById('saveSolutionModal'));
 const solutionsModal     = new bootstrap.Modal(document.getElementById('solutionsModal'));
+const historyModal       = new bootstrap.Modal(document.getElementById('historyModal'));
 
 // CodeMirror instance (set during init)
 let cm = null;
@@ -695,22 +697,129 @@ async function deleteSolution(filename) {
   }
 }
 
+// ── Conversation History ──────────────────────────────────────────────────────
+
+function diffColor(diff) {
+  return { BEGINNER: '#16a34a', EASY: '#15803d', MEDIUM: '#d97706', HARD: '#dc2626' }[diff] || '#6b7280';
+}
+
+function restoreChat(messages) {
+  chatMessages.innerHTML = '';
+  const ws = document.getElementById('welcomeScreen');
+  if (ws) ws.remove();
+
+  messages.forEach(msg => {
+    if (msg.role === 'user' && msg.content.startsWith('Start my coding session')) return;
+    appendMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content);
+  });
+  scrollBottom();
+}
+
+async function openHistoryModal() {
+  historyModal.show();
+  const body = document.getElementById('historyListBody');
+  body.innerHTML = '<p class="text-secondary text-center py-3"><i class="bi bi-hourglass-split me-2"></i>Loading...</p>';
+
+  try {
+    const res  = await fetch('/api/conversations');
+    const data = await res.json();
+
+    if (!data.conversations || data.conversations.length === 0) {
+      body.innerHTML = '<p class="text-secondary text-center py-4"><i class="bi bi-clock me-2"></i>No conversation history yet. Start a session to begin recording history.</p>';
+      return;
+    }
+
+    body.innerHTML = `
+      <div class="table-responsive">
+        <table class="table table-hover table-sm mb-0">
+          <thead><tr>
+            <th>Session</th>
+            <th>Level</th>
+            <th>Exchanges</th>
+            <th>Last Active</th>
+            <th class="text-end">Actions</th>
+          </tr></thead>
+          <tbody>
+            ${data.conversations.map(c => `
+              <tr>
+                <td>
+                  <div class="fw-semibold" style="font-size:0.85rem;">${escapeHtml(c.title)}</div>
+                  <div class="text-muted" style="font-size:0.71rem;font-family:var(--font-mono)">${escapeHtml(c.model || '')}</div>
+                </td>
+                <td><span class="badge" style="background:${diffColor(c.difficulty)};font-size:0.68rem;">${c.difficulty}</span></td>
+                <td class="text-secondary small">${Math.floor(c.messageCount / 2)}</td>
+                <td class="text-secondary small">${new Date(c.lastActiveAt).toLocaleString()}</td>
+                <td class="text-end">
+                  <button class="btn btn-sm resume-conv-btn me-1" data-id="${escapeHtml(c.id)}" title="Resume this session">
+                    <i class="bi bi-arrow-repeat"></i> Resume
+                  </button>
+                  <button class="btn btn-sm del-conv-btn" data-id="${escapeHtml(c.id)}" title="Delete">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    body.querySelectorAll('.resume-conv-btn').forEach(btn =>
+      btn.addEventListener('click', () => resumeConversation(btn.dataset.id)));
+    body.querySelectorAll('.del-conv-btn').forEach(btn =>
+      btn.addEventListener('click', () => deleteConversation(btn.dataset.id)));
+  } catch (e) {
+    body.innerHTML = `<p class="text-danger text-center py-3">Failed to load: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function resumeConversation(id) {
+  if (!confirm('Resume this session? Your current chat will be replaced.')) return;
+  try {
+    const res  = await fetch(`/api/conversations/${encodeURIComponent(id)}/resume`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Resume failed');
+    historyModal.hide();
+    restoreChat(data.messages);
+    updateStats(data.stats);
+    showToast('Session resumed!', 'success');
+  } catch (e) {
+    showToast(`Resume failed: ${e.message}`, 'danger');
+  }
+}
+
+async function deleteConversation(id) {
+  if (!confirm('Delete this conversation? This cannot be undone.')) return;
+  try {
+    const res  = await fetch(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Delete failed');
+    showToast('Conversation deleted.', 'success');
+    openHistoryModal();
+  } catch (e) {
+    showToast(`Delete failed: ${e.message}`, 'danger');
+  }
+}
+
+historyBtn.addEventListener('click', openHistoryModal);
+
 saveSolutionBtn.addEventListener('click', openSaveModal);
 mySolutionsBtn.addEventListener('click', openSolutionsModal);
 document.getElementById('confirmSaveBtn').addEventListener('click', confirmSaveSolution);
 document.getElementById('solutionFilename').addEventListener('input', updateFilenamePreview);
 
 
-// ── Init: check Ollama on page load ───────────────────────────────────────────
+// ── Init: check Ollama & restore session on page load ────────────────────────
 (async () => {
   initCodeMirror();
-  initResize();
   modelSelect.disabled = true;
   await checkOllama();
 
   try {
-    const res   = await fetch('/api/stats');
-    const stats = await res.json();
-    updateStats(stats);
+    const res  = await fetch('/api/session');
+    const data = await res.json();
+    updateStats(data.stats);
+    if (data.hasSession && data.messages.length > 0) {
+      restoreChat(data.messages);
+      showToast('Previous session restored', 'info');
+    }
   } catch { /* ignore */ }
 })();
