@@ -1,11 +1,13 @@
 'use strict';
 require('dotenv').config();
 
-const express = require('express');
-const session = require('express-session');
-const path    = require('path');
-const fs      = require('fs');
-const { Ollama } = require('ollama');
+const express        = require('express');
+const session        = require('express-session');
+const path           = require('path');
+const fs             = require('fs');
+const vm             = require('vm');
+const { spawn }      = require('child_process');
+const { Ollama }     = require('ollama');
 
 const app    = express();
 const PORT   = process.env.PORT   || 3000;
@@ -342,6 +344,63 @@ app.delete('/api/solutions/:filename', (req, res) => {
     res.status(404).json({ error: 'Solution not found.' });
   }
 });
+
+// Run code
+app.post('/api/run', (req, res) => {
+  const { code, language } = req.body;
+  if (!code || !code.trim()) return res.json({ output: '', error: null });
+
+  if (language === 'javascript') {
+    const logs = [];
+    const fmt  = (...a) => a.map(v => (typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v))).join(' ');
+    const sandbox = {
+      console: {
+        log:   (...a) => logs.push(fmt(...a)),
+        error: (...a) => logs.push('[error] ' + fmt(...a)),
+        warn:  (...a) => logs.push('[warn] '  + fmt(...a)),
+        info:  (...a) => logs.push('[info] '  + fmt(...a)),
+      },
+      Math, JSON, Array, Object, String, Number, Boolean, Date, RegExp, Map, Set,
+      parseInt, parseFloat, isNaN, isFinite,
+      encodeURIComponent, decodeURIComponent,
+      // neutralise timers — they can't work synchronously anyway
+      setTimeout: () => {}, clearTimeout: () => {},
+      setInterval: () => {}, clearInterval: () => {},
+    };
+    try {
+      vm.runInNewContext(code, sandbox, { timeout: 5000 });
+      res.json({ output: logs.join('\n'), error: null });
+    } catch (err) {
+      res.json({ output: logs.join('\n'), error: err.message });
+    }
+    return;
+  }
+
+  if (language === 'python') {
+    const cmd = process.platform === 'win32' ? 'python' : 'python3';
+    runProcess(res, cmd, ['-u', '-c', code]);
+    return;
+  }
+
+  res.json({ output: '', error: `Run is supported for JavaScript and Python only. For ${language}, use an online compiler.` });
+});
+
+function runProcess(res, cmd, args) {
+  let out = '', err = '', done = false;
+  const proc = spawn(cmd, args);
+  const guard = setTimeout(() => { if (!done) { proc.kill(); err = 'Timed out after 5 seconds.'; } }, 5000);
+
+  proc.stdout.on('data', d => out += d.toString());
+  proc.stderr.on('data', d => err += d.toString());
+  proc.on('close', () => {
+    done = true; clearTimeout(guard);
+    res.json({ output: out.trim(), error: err.trim() || null });
+  });
+  proc.on('error', e => {
+    done = true; clearTimeout(guard);
+    res.json({ output: '', error: `Could not start process: ${e.message}` });
+  });
+}
 
 // ── Error helper ───────────────────────────────────────────────────────────────
 function ollamaError(err) {

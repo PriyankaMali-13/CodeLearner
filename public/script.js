@@ -20,9 +20,19 @@ const stopBtn         = document.getElementById('stopBtn');
 const clearInputBtn   = document.getElementById('clearInputBtn');
 const saveSolutionBtn = document.getElementById('saveSolutionBtn');
 const mySolutionsBtn  = document.getElementById('mySolutionsBtn');
+const runBtn          = document.getElementById('runBtn');
+const outputPanel     = document.getElementById('outputPanel');
+const outputContent   = document.getElementById('outputContent');
+const runTime         = document.getElementById('runTime');
+const clearOutputBtn  = document.getElementById('clearOutputBtn');
 
 const saveSolutionModal  = new bootstrap.Modal(document.getElementById('saveSolutionModal'));
 const solutionsModal     = new bootstrap.Modal(document.getElementById('solutionsModal'));
+
+// CodeMirror instance (set during init)
+let cm = null;
+function getCode()    { return cm ? cm.getValue() : codeEditor.value; }
+function setCode(val) { if (cm) { cm.setValue(val); cm.clearHistory(); } else codeEditor.value = val; }
 
 // Abort controller — lets us cancel in-flight fetch requests
 let currentAbort = null;
@@ -77,26 +87,6 @@ function updateStats(stats) {
   const diff = stats.difficulty || 'BEGINNER';
   diffBadge.textContent = diff;
   diffBadge.setAttribute('data-difficulty', diff);
-
-  const levels = ['BEGINNER', 'EASY', 'MEDIUM', 'HARD'];
-  const idx    = levels.indexOf(diff);
-  levels.forEach((lvl, i) => {
-    const el   = document.getElementById(`level-${lvl}`);
-    const icon = el.querySelector('i');
-    if (i < idx) {
-      icon.className = 'bi bi-check-circle-fill me-1 text-success';
-      el.classList.add('active');
-      el.querySelector('span').className = 'small text-success';
-    } else if (i === idx) {
-      icon.className = 'bi bi-circle-fill me-1 text-warning';
-      el.classList.add('active');
-      el.querySelector('span').className = 'small text-warning';
-    } else {
-      icon.className = 'bi bi-circle me-1 text-secondary';
-      el.classList.remove('active');
-      el.querySelector('span').className = 'small text-secondary';
-    }
-  });
 
   // Sync model selector if stats carry model info
   if (stats.model && modelSelect.value !== stats.model) {
@@ -255,7 +245,7 @@ async function doAction(action) {
 }
 
 async function reviewCode() {
-  const code = codeEditor.value.trim();
+  const code = getCode().trim();
   if (!code) { showToast('Write some code in the editor first!', 'warning'); return; }
 
   const lang = languageSelect.value;
@@ -279,7 +269,7 @@ async function resetSession() {
     await fetch('/api/reset', { method: 'POST' });
     chatMessages.innerHTML = '';
     updateStats({ solvedCount: 0, problemCount: 0, hintCount: 0, difficulty: 'BEGINNER' });
-    codeEditor.value = '';
+    setCode('');
 
     // Re-add welcome screen
     const div = document.createElement('div');
@@ -393,21 +383,126 @@ openCodeEditor.addEventListener('click', () => {
   codeEditor.focus();
 });
 
-codeEditor.addEventListener('keydown', (e) => {
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    const start = codeEditor.selectionStart;
-    const end   = codeEditor.selectionEnd;
-    codeEditor.value = codeEditor.value.substring(0, start) + '  ' + codeEditor.value.substring(end);
-    codeEditor.selectionStart = codeEditor.selectionEnd = start + 2;
-  }
-});
+// ── CodeMirror — snippets + hints + lint ──────────────────────────────────────
+
+const CM_MODE = {
+  javascript: { name: 'javascript', esVersion: 11 },
+  python:     'python',
+  java:       'text/x-java',
+  cpp:        'text/x-c++src',
+  c:          'text/x-csrc',
+};
+
+const JS_SNIPPETS = [
+  { t: 'fn',      label: 'function declaration',   body: 'function name(params) {\n  \n}' },
+  { t: 'afn',     label: 'arrow function',          body: 'const name = (params) => {\n  \n};' },
+  { t: 'async',   label: 'async function',          body: 'async function name(params) {\n  \n}' },
+  { t: 'cls',     label: 'class',                   body: 'class Name {\n  constructor() {\n    \n  }\n}' },
+  { t: 'fori',    label: 'for loop (index)',         body: 'for (let i = 0; i < arr.length; i++) {\n  \n}' },
+  { t: 'fore',    label: 'for...of',                body: 'for (const item of arr) {\n  \n}' },
+  { t: 'forin',   label: 'for...in',                body: 'for (const key in obj) {\n  \n}' },
+  { t: 'wh',      label: 'while loop',              body: 'while (condition) {\n  \n}' },
+  { t: 'ife',     label: 'if / else',               body: 'if (condition) {\n  \n} else {\n  \n}' },
+  { t: 'sw',      label: 'switch / case',           body: 'switch (expr) {\n  case value:\n    break;\n  default:\n    break;\n}' },
+  { t: 'tc',      label: 'try / catch',             body: 'try {\n  \n} catch (err) {\n  console.error(err);\n}' },
+  { t: 'cl',      label: 'console.log()',           body: 'console.log()' },
+  { t: 'ce',      label: 'console.error()',         body: 'console.error()' },
+  { t: 'pr',      label: 'new Promise',             body: 'new Promise((resolve, reject) => {\n  \n})' },
+  { t: 'map',     label: 'Array.map()',             body: 'arr.map((item) => item)' },
+  { t: 'fil',     label: 'Array.filter()',          body: 'arr.filter((item) => condition)' },
+  { t: 'red',     label: 'Array.reduce()',          body: 'arr.reduce((acc, item) => acc, initial)' },
+  { t: 'find',    label: 'Array.find()',            body: 'arr.find((item) => condition)' },
+  { t: 'imp',     label: 'import',                  body: "import { name } from 'module';" },
+  { t: 'expd',    label: 'export default',          body: 'export default ' },
+  { t: 'obj',     label: 'object literal',          body: 'const obj = {\n  key: value,\n};' },
+  { t: 'destruct',label: 'destructuring',           body: 'const { key1, key2 } = obj;' },
+  { t: 'spread',  label: 'spread',                  body: 'const copy = { ...original };' },
+  { t: 'iife',    label: 'IIFE',                    body: '(function () {\n  \n})();' },
+];
+
+function snippetHint(editor) {
+  const cur   = editor.getCursor();
+  const token = editor.getTokenAt(cur);
+  const word  = token.string.toLowerCase();
+  const from  = CodeMirror.Pos(cur.line, token.start);
+  const to    = CodeMirror.Pos(cur.line, token.end);
+
+  const snippets = word.length > 0
+    ? JS_SNIPPETS.filter(s => s.t.startsWith(word))
+    : [];
+
+  const snippetItems = snippets.map(s => ({
+    text:        s.body,
+    displayText: `⚡ ${s.t}  →  ${s.label}`,
+    className:   'cm-snippet-item',
+    hint(cm) {
+      cm.replaceRange(s.body, from, to);
+      // Move cursor inside the first block if it has a newline
+      if (s.body.includes('\n')) {
+        const lines = s.body.split('\n');
+        cm.setCursor({ line: cur.line + 1, ch: lines[1].length });
+      }
+    },
+  }));
+
+  let builtins = [];
+  try {
+    const b = CodeMirror.hint.javascript(editor);
+    if (b) builtins = b.list || [];
+  } catch (_) {}
+
+  const list = [...snippetItems, ...builtins];
+  if (!list.length) return null;
+  return { list, from, to };
+}
+
+function initCodeMirror() {
+  cm = CodeMirror.fromTextArea(codeEditor, {
+    mode:             CM_MODE[languageSelect.value] || CM_MODE.javascript,
+    theme:            'eclipse',
+    lineNumbers:      true,
+    autoCloseBrackets:true,
+    matchBrackets:    true,
+    indentUnit:       2,
+    tabSize:          2,
+    indentWithTabs:   false,
+    lineWrapping:     false,
+    lint:             { esversion: 11, undef: false, unused: false },
+    gutters:          ['CodeMirror-lint-markers'],
+    extraKeys: {
+      'Ctrl-Space': 'autocomplete',
+      Tab(editor) {
+        if (editor.somethingSelected()) editor.indentSelection('add');
+        else editor.replaceSelection('  ');
+      },
+    },
+    hintOptions: { hint: snippetHint, completeSingle: false, alignWithWord: true },
+  });
+
+  // Auto-suggest only on word characters and dot (not ; ) , { } etc.)
+  cm.on('inputRead', (editor, change) => {
+    if (cm.state.completionActive) return;
+    const ch = change.text[0];
+    if (ch && /[\w$.]/.test(ch)) {
+      CodeMirror.commands.autocomplete(editor, null, { completeSingle: false });
+    }
+  });
+
+  // Language switcher → change CM mode + toggle lint
+  languageSelect.addEventListener('change', () => {
+    const lang = languageSelect.value;
+    cm.setOption('mode', CM_MODE[lang] || lang);
+    const isJS = lang === 'javascript';
+    cm.setOption('lint',    isJS ? { esversion: 11, undef: false, unused: false } : false);
+    cm.setOption('gutters', isJS ? ['CodeMirror-lint-markers'] : []);
+  });
+}
 
 reviewCodeBtn.addEventListener('click', reviewCode);
 
 clearCodeBtn.addEventListener('click', () => {
-  if (codeEditor.value && confirm('Clear the code editor?')) {
-    codeEditor.value = '';
+  if (getCode().trim() && confirm('Clear the code editor?')) {
+    setCode('');
     showToast('Editor cleared.');
   }
 });
@@ -424,10 +519,65 @@ document.querySelectorAll('.quick-btn').forEach(btn => {
   btn.addEventListener('click', () => doAction(btn.dataset.action));
 });
 
+// ── Run Code ──────────────────────────────────────────────────────────────────
+
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function runCode() {
+  const code = getCode().trim();
+  if (!code) { showToast('Write some code first!', 'warning'); return; }
+
+  outputPanel.classList.remove('d-none');
+  outputContent.innerHTML = '<span class="output-running"><span class="dot"></span><span class="dot"></span><span class="dot"></span> Running…</span>';
+  runTime.textContent = '';
+  runBtn.disabled = true;
+
+  const t0 = Date.now();
+  try {
+    const res  = await fetch('/api/run', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ code, language: languageSelect.value }),
+    });
+    const data = await res.json();
+    const ms   = Date.now() - t0;
+    runTime.textContent = `${ms}ms`;
+
+    let html = '';
+    if (data.output) {
+      html += data.output.split('\n').map(line =>
+        `<div class="output-line">${escapeHtml(line)}</div>`
+      ).join('');
+    }
+    if (data.error) {
+      html += data.error.split('\n').map(line =>
+        `<div class="output-error">${escapeHtml(line)}</div>`
+      ).join('');
+    }
+    if (!html) {
+      html = '<span class="output-empty">No output</span>';
+    }
+    outputContent.innerHTML = html;
+  } catch (e) {
+    outputContent.innerHTML = `<div class="output-error">${escapeHtml(e.message)}</div>`;
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+runBtn.addEventListener('click', runCode);
+clearOutputBtn.addEventListener('click', () => {
+  outputPanel.classList.add('d-none');
+  outputContent.innerHTML = '';
+  runTime.textContent = '';
+});
+
 // ── Save & Browse Solutions ───────────────────────────────────────────────────
 
 function openSaveModal() {
-  const code = codeEditor.value.trim();
+  const code = getCode().trim();
   if (!code) { showToast('Write some code in the editor first!', 'warning'); return; }
 
   const lang = languageSelect.value;
@@ -447,7 +597,7 @@ function updateFilenamePreview() {
 async function confirmSaveSolution() {
   const raw      = document.getElementById('solutionFilename').value.trim();
   const language = languageSelect.value;
-  const code     = codeEditor.value.trim();
+  const code     = getCode().trim();
 
   try {
     const res  = await fetch('/api/save-solution', {
@@ -522,10 +672,10 @@ async function loadSolutionIntoEditor(filename) {
     const res  = await fetch(`/api/solutions/${encodeURIComponent(filename)}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    codeEditor.value = data.content;
+    setCode(data.content);
     solutionsModal.hide();
     document.getElementById('codePanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    codeEditor.focus();
+    if (cm) cm.focus(); else codeEditor.focus();
     showToast(`Loaded: ${filename}`, 'success');
   } catch (e) {
     showToast(`Load failed: ${e.message}`, 'danger');
@@ -550,8 +700,11 @@ mySolutionsBtn.addEventListener('click', openSolutionsModal);
 document.getElementById('confirmSaveBtn').addEventListener('click', confirmSaveSolution);
 document.getElementById('solutionFilename').addEventListener('input', updateFilenamePreview);
 
+
 // ── Init: check Ollama on page load ───────────────────────────────────────────
 (async () => {
+  initCodeMirror();
+  initResize();
   modelSelect.disabled = true;
   await checkOllama();
 
